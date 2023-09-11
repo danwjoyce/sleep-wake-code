@@ -1,0 +1,151 @@
+---
+title: "How to Use Periodogram and Actigraphy Summary Functions"
+output:
+  html_document:
+    df_print: paged
+---
+```{r}
+source("setup-env.R")
+source("read-participant.R")
+source("aggregating-functions.R")
+source("periodogram-functions.R")
+source("visualisation-functions.R")
+```
+
+
+
+# Load a Participant's SVM data in CSV Format
+
+Here, we use a test participant's data which has been preproceesed into CSV from the native actigraph data with the important column being SVM (the sum vector magnitude) which we take to be the activity level in a given time window (in this example, it's 30 minutes)
+
+```{r}
+test.sub <- "test-patient-1-svm.csv"
+d <- readParticipantCSV( data.path, test.sub )
+head(d)
+```
+
+# Prepare Data by Binning
+
+We want an hourly periodogram and the source data is in 30 minute windows, so the first thing to do is take the average of each half-hourly bin and re-arrange the data in `d` so it's in hourly bins 
+
+```{r}
+df <- aggregateHours( d )
+head( df )
+```
+# Activity Matrix
+
+The data above is in "long" format -- the first column is the Time and the second the one-hourly activity.
+
+It's often easier to work with an activity matrix, organised such that rows are days, and columns are hours.
+
+We use the `dayByHourMatrix` function to convert from "long" to activity-matrix format:
+
+```{r}
+# convert to a matrix : rows = days, cols = hours [0 ... 23]
+mat.df <- dayByHourMatrix( df )
+knitr::kable( round( mat.df, 6), align = "c" )
+```
+
+First, notice that the `NA` values are where there is no data for a given day / hour.  In this example, this is because actigraph recording started at 14:00 on the first day and ended at 15:00 on the last day and there were 7 days of recording.
+
+Notice that the column names are numbered 0 to 23.  Hour zero is midnight, and hour 23 is eleven PM.  This is fine for processing the data, but to visualise e.g. periods of inactivity relating to usual sleep, we usually arrange the plot so that midnight is the "middle" of the horizontal axis, with midday being the far left and 11:00 (11 am of the next day) being the far right.  Here's the preceding data `mat.df` organised this way:
+
+```{r}
+activityHeatmap( mat.df )
+```
+
+# Compute Chi-Square Periodogram
+
+The next step is to compute a Chi-Square periodogram.  We decide on the periods were are interested in -- don't confuse a **period** of say, 12 hours with the *actual activity* at hour = 12*.  If we ask for a periodogram for a **period of 12 hours**, we are essentially asking if there is any correlation at any twelve hour interval (irrespective of the actual hour of day), not that the activity at Hour = 12 is the same on each day.  
+
+We use the `periodogram_ChiSquare` function, setting the periods we want to analyse (here, using periods ranging from 18 to 32 hours which 'span' the expected range of circadian rhythms/cycles like sleep, which should be around 24 hours).  Note the option `greedy = TRUE` implements the algorithm from:
+
+> Tackenberg, M. C., & Hughey, J. J. (2021). The risks of using the chi-square periodogram to estimate the period of biological rhythms. PLoS computational biology, 17(1), e1008567.
+
+This algorithm helps remove problems with discontinuities being introduced into the periodogram as artefacts of how the number of days (in the data) align with integer multiples of the periods requested.  In short, it seems like this is the best method for Chi-Square periodograms given the current state of the literature.  Other methods are implemented (see `periodogram-functions.R`) but they are not recommended.
+
+
+```{r}
+# compute a periodograms
+pg <- periodogram_ChiSquare( mat.df, periods = seq(18,32,by = 1), greedy = TRUE )
+
+# add log of P-values for chi-square with df = period minus 1; but beware, these are not robust with less than 10 days of recording
+pg <- add_pValue_ChiSquare( pg )
+```
+
+And now plot the periodogram:
+
+```{r}
+# plot periodogram
+ggplot( pg, aes( x = Period, y = Value ) ) + geom_bar( stat = "identity" )
+```
+
+Pay attention to the horizontal axis : these are **periods** not hours of the day -- so, we can see that there is **most periodocity** (in activity, over 7 days, because that's all the data we have) at intervals of 24, 30 and 18 hours (i.e. the highest three bars in the periodogram)
+
+# Test Case: Perfectly Periodic Data
+
+To demonstrate the method is meaningful, we now simulate data where for 20 days, the activity is exactly the same each day, with a peak in activity at hour = 12 (midday) and consistently "no activity" at around midnight.  
+
+First, the activity graph:
+
+```{r}
+# perfect 24 hour circadian rhythm, highest at
+# midday (hour 12) lowest at mignight (hour 23:00 and 00:00)
+mat.df <-  scale01( matrix( rep( dnorm( seq(1,24), mean = 12, sd = 5 ), 20 ), 
+                            byrow = TRUE, ncol = 24, nrow = 20 ) )
+activityHeatmap( mat.df )
+```
+Examining this, we can see that there no activity at midnight, and perfect periodicity -- that is, there is a perfect 24 hour (circadian) cycle to the data.
+
+Now, look at the greedy Chi Square Periodogram:
+
+```{r}
+pg <- periodogram_ChiSquare( mat.df, periods = seq(18,32,by = 1), greedy = TRUE )
+ggplot( pg, aes( x = Period, y = Value ) ) + geom_bar( stat = "identity" )
+```
+
+As predicted from visualising the activity matrix, the strongest period is 24 hours, as we would expect. 
+
+# Summary : Basic Code Structure for a Participant
+
+Rather than following the above tutorial, the following is skeleton code to process "one participant" that you can copy / paste into your own scripts.
+
+```{r}
+# 0. Setup R environment with necessary functions and environment
+source("setup-env.R")
+source("read-participant.R")
+source("aggregating-functions.R")
+source("periodogram-functions.R")
+source("visualisation-functions.R")
+
+# 1. Filename for .CSV file for this participant
+test.sub <- "test-patient-1-svm.csv"
+
+# 2. Load the participant's data
+#    You need to set up data.path in `setup-env.R`
+#    so that it points to the directory containing
+#    you participant's data
+d <- readParticipantCSV( data.path, test.sub )
+
+# 3. Aggregate data into one-hour bins
+df <- aggregateHours( d )
+
+# 4. Convert to an activity matrix with rows = days, cols = hours of day
+mat.df <- dayByHourMatrix( df )
+
+# 5. Compute periodogram for this participant
+pg <- periodogram_ChiSquare( mat.df, periods = seq(18,32,by = 1), greedy = TRUE )
+```
+
+Note, we've skipped visualisation steps, but here's the skeleton code for doing using the single participant from code above:
+
+```{r}
+# 6. Visualise activity matrix
+activityHeatmap( mat.df )
+```
+
+```{r}
+# 7. Visualise periodogram
+ggplot( pg, aes( x = Period, y = Value ) ) + geom_bar( stat = "identity" )
+```
+

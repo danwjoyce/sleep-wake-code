@@ -1,0 +1,171 @@
+---
+title: "How to Use Summary Nonparametric Actigraphy Functions"
+output:
+  html_document:
+    df_print: paged
+---
+```{r}
+source("setup-env.R")
+source("read-participant.R")
+source("aggregating-functions.R")
+source("periodogram-functions.R")
+source("visualisation-functions.R")
+source("non-parametric-measures.R")
+```
+
+# Introduction
+This tutorial assumes you've been through the periodogram tutorial especially for loading and converting data into a usable format.
+
+Here, we focus on non-parametric summaries for a given participant, namely:
+
+  * **IS** : inter-daily (between-day) stability of any rest-activity rhythm (i.e. sleep/wake)
+  * **IV** : intra-daily (within-day) variability of of fragmentation of rest-activity rhythms
+
+  * **M10 activity** : the average activity value for the 10 hour window with *largest mean activity*
+  * **M10 midpoint** : for the largest 10 hour window, the hour (from midnight 00:00 to eleven PM 23:00) in the middle of this window
+
+  * **L5 activity** : the value of the 5 hour window with the lowest mean activity (i.e. rest)
+  * **L5 midpoint** : for the lowest-activity 5 hour window, the in the middle of this window (as for M10)
+
+The relevant references as follows:
+
+For the IS and IV measures, see:
+
+> W. Witting, I.H. Kwa, P. Eikelenboom, M. Mirmiran, D.F. Swaab, Alterations in the circadian rest-activity rhythm in aging and  Alzheimer's disease, Biological Psychiatry, Volume 27, Issue 6, 1990, pp. 563-572
+
+For the filtering methods and extraction of M10 / L5, see:
+
+> Van Someren, E. J., Swaab, D. F., Colenda, C. C., Cohen, W., McCall, W. V., & Rosenquist, P. B. (1999). Bright light therapy: improved sensitivity to its effects on rest-activity rhythms in Alzheimer patients by application of nonparametric methods. Chronobiology international, 16(4), 505-518.
+
+Some cautionary notes:
+
+  * For IV, the default is to use last-observation-carried-forward for "holes" in the hourly activity data.  For example, if the data is `3,4,3,2,NA,NA,4,5` this gets pre-processed to `3,4,3,2,2,2,4,5` so that the numerical computation of the first-difference between hours -- e.g. activity at hour N minus hour (N-1) -- doesn't end up with discontinuity artefacts resulting from data dropout in the activity data for a one or more hours on a given day
+
+  * The filtering method implemented for M10 and L5 is based on experimentation because the reference (Van Someren et al, 1999) doesn't supply a concrete algorithm, only that "bi-directional" filtering was used for "zero phase" filter output.  Here, the filter is a rolling average with 10 and 5 hour windows respectively for M10 and L5.  The average daily activity vector is filtered forward, then backward, then averaged together which avoids phase shifts.  Testing this on perfect data, complete noise and one test participant ("real" data) shows that it works well when compared to visual inspection of the activity heatmaps.
+  
+# Generate Some Data
+
+First load up our test participant and pre-process (as we did for the periodograms tutorial)
+
+```{r}
+test.sub <- "test-patient-1-svm.csv"
+d <- readParticipantCSV( data.path, test.sub )
+df <- aggregateHours( d )
+mat.df.test.sub <- dayByHourMatrix( df )
+```
+
+Now, generate some fake perfect (perfect 24 hour rest/activity) and noisy data (no periodic content).
+
+```{r}
+set.seed(314)
+mat.df.perfect <-  scale01( matrix( rep( dnorm( seq(1,24), mean = 12, sd = 5 ), 20 ), byrow = TRUE, ncol = 24, nrow = 20 ) )
+mat.df.noise <- scale01( matrix( runif( 24 * 20 ), byrow = TRUE, ncol = 24, nrow = 20 ) )
+```
+
+And visualise just we understand the data:
+```{r}
+activityHeatmap( mat.df.test.sub, "Test Participant" )
+```
+```{r}
+activityHeatmap( mat.df.perfect, "Perfect Cycle" )
+```
+```{r}
+activityHeatmap( mat.df.noise, "Noise Participant" )
+```
+# IS and IV measures
+
+Here's how we compute the IV and IS for the example participants above:
+```{r}
+IV.test.sub <- intradailyVariability( mat.df.test.sub )
+IV.perfect <- intradailyVariability( mat.df.perfect )
+IV.noise <- intradailyVariability( mat.df.noise )
+
+IS.test.sub <- interdailyStability( mat.df.test.sub )
+IS.perfect <- interdailyStability( mat.df.perfect )
+IS.noise <- interdailyStability( mat.df.noise )
+
+```
+
+Now, just for the sake of comparison, plot them:
+
+```{r}
+df <- data.frame(
+  IV = c( IV.test.sub, IV.perfect, IV.noise ),
+  IS = c( IS.test.sub, IS.perfect, IS.noise ),
+  Label = factor( c("Test","Perfect","Noise") )
+)
+
+ggplot(df, aes(x = IV, y = IS, colour = Label) ) + geom_point(size = 4) +
+  xlab("Intradaily Variability (IV)") +
+  ylab("Interdaily Stabilist (IS)")
+
+```
+
+So in this plot, we can see:
+
+  * The perfect participant with 24 hour rest/wake has **high** IS (stable rest/activity rhythm) and the pure noise participant has practically zero IS.  Our real participant has low/moderate IS.
+  * The perfect participant has low (almost zero) IV (i.e. there is no fragmentation of the rest/activity rhythm).  The pure noise participant has (predictably) very high (just over 2) IV (no stability within a day).  Our test participant has quite high IV (so quite a bit of fragmentation of rest/activity).
+  
+This shows us that these measures are working as intended.
+
+# M10 and L5
+
+Here's how to compute the M10 and L5 measures:
+
+```{r}
+M10.test.sub <- compute_M10( mat.df.test.sub )
+M10.perfect <- compute_M10( mat.df.perfect )
+M10.noise <- compute_M10( mat.df.noise )
+
+L5.test.sub <- compute_L5( mat.df.test.sub )
+L5.perfect <- compute_L5( mat.df.perfect )
+L5.noise <- compute_L5( mat.df.noise )
+```
+
+```{r}
+df2 <- data.frame(
+  M10 = c(M10.test.sub$M10.hour, M10.perfect$M10.hour, M10.noise$M10.hour ),
+  L5  = c(L5.test.sub$L5.hour, L5.perfect$L5.hour, L5.noise$L5.hour ),
+  Label = factor( c("Test","Perfect","Noise") )
+)
+
+ggplot(df2, aes(x = M10, y = L5, colour = Label) ) + geom_point(size = 4) +
+  xlab("M10 Hour") +
+  ylab("L5 Hour")
+
+
+```
+
+So here, we see that:
+
+  * The "noise" participant (with no meaningful rest/activity data at all) has M10 mipoint at 8 hours and L5 at around 18 hours-- but this should be interpreted with caution because we know (from the heatmap, and the IV/IS statistics) that there is nothing meaningful in this data
+  * The perfect participant has -- as expected -- the highest activity window (M10) at hour 11 (just before midday) and L5 at around 23:00 (exactly as the heatmap would predict)
+  * Our test participant has the M10 midpoint at 16:00 hours and the least active period L5 at about 06:00 in the morning which concords with the heatmap
+  
+  
+
+# Summary : Basic Code Structure for a Participant
+
+Rather than following the above tutorial, the following is skeleton code to process "one participant" that you can copy / paste into your own scripts.
+
+```{r}
+# 1. load data from CSV file, just as for periodogram 
+test.sub <- "test-patient-1-svm.csv"
+d <- readParticipantCSV( data.path, test.sub )
+
+# 2. Aggreagte and convert to [day,hour] matrix format
+df <- aggregateHours( d )
+mat.df.test.sub <- dayByHourMatrix( df )
+
+# 3. Compute summary statistics
+M10.test.sub <- compute_M10( mat.df.test.sub )
+L5.test.sub <- compute_L5( mat.df.test.sub )
+IV.test.sub <- intradailyVariability( mat.df.test.sub )
+IS.test.sub <- interdailyStability( mat.df.test.sub )
+
+print( M10.test.sub )
+print( L5.test.sub )
+print(IV.test.sub)
+print(IS.test.sub)
+
+```
